@@ -59,17 +59,58 @@ options:
                         Speed factor for speech (0.8-1.5)
   --temperature TEMPERATURE
                         Temperature for generation (0.5-1.5)
+  --device {cpu,cuda,mps}
+                        either 'cpu', 'cuda', 'mps'
 </pre>
+
+# Misc
+
+`GPT-SoVITS` のインストール、使い方については、一通り説明したビデオがあります。
+
+* YouTube: [GPT-SoVITS でローカル TTS / 《復活》こんにちわ AI フォーラム・スペシャル 2025年2月28日](https://youtu.be/rrVvoFryYK0)
+
+そこで喋っていた、学習済みモデルのダウンロードのシェルコマンドは、こちらになります：
+<pre>
+pip install -U "huggingface_hub[cli]"
+
+# v2 models
+huggingface-cli download lj1995/GPT-SoVITS \
+chinese-hubert-base/config.json \
+chinese-hubert-base/preprocessor_config.json \
+chinese-hubert-base/pytorch_model.bin \
+chinese-roberta-wwm-ext-large/config.json \
+chinese-roberta-wwm-ext-large/pytorch_model.bin \
+chinese-roberta-wwm-ext-large/tokenizer.json \
+gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt \
+gsv-v2final-pretrained/s2D2333k.pth \
+gsv-v2final-pretrained/s2G2333k.pth \
+--local-dir ./GPT_SoVITS/pretrained_models
+
+# Faster Whisper
+huggingface-cli download Systran/faster-whisper-large-v3 \
+--local-dir ./tools/asr/models
+
+# v3 models
+huggingface-cli download lj1995/GPT-SoVITS s1v3.ckpt --local-dir ./GPT_SoVITS/pretrained_models
+huggingface-cli download lj1995/GPT-SoVITS s2Gv3.pth --local-dir ./GPT_SoVITS/pretrained_models
+
+huggingface-cli download lj1995/GPT-SoVITS models--nvidia--bigvgan_v2_24khz_100band_256x/bigvgan_generator.pt --local-dir ./GPT_SoVITS/pretrained_models
+huggingface-cli download lj1995/GPT-SoVITS models--nvidia--bigvgan_v2_24khz_100band_256x/config.json --local-dir ./GPT_SoVITS/pretrained_models
+</pre>
+
+参考にしてください。
+
 
 # Update History
 
 ## 2025/03/07
 
 * merge the latest `GPT-SoVITS` v3 release
-* minor fix for the latest code
-  * `GPT_SoVITS/text/LangSegmenter/langsegmenter.py`
+  * minor fix for the latest code
+    * on `GPT_SoVITS/text/LangSegmenter/langsegmenter.py`
 * update `local_tts/tts.py`
   * add MPS optimization -- only T2S is still done on CPU
+* update `local_tts/README.md`
 
 ## 2025/03/01
 
