@@ -479,8 +479,18 @@ def main():
                         help="Speed factor for speech (0.8-1.5)")
         parser.add_argument('--temperature', type=float, default=1.0,
                         help="Temperature for generation (0.5-1.5)")
+        parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='mps',
+                        help="either 'cpu', 'cuda', 'mps'")
 
         args = parser.parse_args()
+
+        device = args.device
+        if device == 'mps' and not torch.backends.mps.is_available():
+            warning('mps is not available. set cpu instead')
+            device = 'cpu'
+        elif device == 'cuda' and not torch.cuda.is_available():
+            warning('cuda is not available. set cpu instead')
+            device = 'cpu'
 
         # Show a loading spinner during initialization
         spinner = Spinner("Initializing TTS models...")
@@ -492,10 +502,11 @@ def main():
             args.ref_audio,
             args.ref_text,
             args.ref_language,
-            device='mps',
+            device=device,
         )
-        # for mps, apply monkey_patch for infer methods
-        monkey_patch_inferes()
+        if device == 'mps':
+            monkey_patch_inferes()
+
 
         target_language = args.target_language
         input_mode = args.input_mode
