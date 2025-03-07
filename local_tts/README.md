@@ -61,3 +61,16 @@ options:
                         Temperature for generation (0.5-1.5)
 </pre>
 
+# Update History
+
+## 2025/03/07
+
+* merge the latest `GPT-SoVITS` v3 release
+* minor fix for the latest code
+  * `GPT_SoVITS/text/LangSegmenter/langsegmenter.py`
+* update `local_tts/tts.py`
+  * add MPS optimization -- only T2S is still done on CPU
+
+## 2025/03/01
+
+* Start the project `local_tts`
