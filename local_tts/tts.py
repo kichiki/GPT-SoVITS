@@ -8,21 +8,27 @@ import pyperclip
 
 import contextlib
 
-os.environ["TQDM_DISABLE"] = "1"
-
-# to hide 'OMP' warnings, probably happening in the library
-os.environ["OMP_NUM_THREADS"] = "1"
-
-from tools.i18n.i18n import I18nAuto
-from GPT_SoVITS.TTS_infer_pack.TTS import TTS_Config, TTS
-import random
-import numpy as np
 import itertools
 import sys
 import math
 import torch
+import types
 
-# for MPS support
+# script should run on the top of the repository
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(os.path.dirname(script_dir))
+
+os.environ["TQDM_DISABLE"] = "1"
+
+from tools.i18n.i18n import I18nAuto
+
+
+# MPS support -- to run on CPU only for T2S part
+
+# for GPT_SoVITS.TTS_infer_pack.TTS.TTS
+from GPT_SoVITS.TTS_infer_pack.TTS import TTS_Config, TTS
+import random
+
 from AR.models.t2s_model import Text2SemanticDecoder
 
 # Store original methods
@@ -50,7 +56,7 @@ def wrapped_infer_panel_batch_infer(self, *args, **kwargs):
         [all_phoneme_ids[0].to('cpu')],
         all_phoneme_lens.to('cpu'),
         prompt.to('cpu'),
-        [all_bert_features[0].to('cpu')],
+        [all_bert_features[0].to('cpu')] if all_bert_features is not None else None,
         top_k=top_k,
         top_p=top_p,
         temperature=temperature,
@@ -81,7 +87,7 @@ def wrapped_infer_panel_naive_batched(self, *args, **kwargs):
         [all_phoneme_ids[0].to('cpu')],
         all_phoneme_lens.to('cpu'),
         prompt.to('cpu'),
-        [all_bert_features[0].to('cpu')],
+        [all_bert_features[0].to('cpu')] if all_bert_features is not None else None,
         top_k=top_k,
         top_p=top_p,
         temperature=temperature,
@@ -100,6 +106,45 @@ def monkey_patch_inferes():
 def restore_original_inferes():
     Text2SemanticDecoder.infer_panel_batch_infer = original_infer_panel_batch_infer
     Text2SemanticDecoder.infer_panel_naive_batched = original_infer_panel_naive_batched
+
+
+# for GPT_SoVITS.inference_webui.get_tts_wav
+
+with open(os.devnull, 'w') as fnull:
+    with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
+        #from GPT_SoVITS.inference_webui import change_gpt_weights, change_sovits_weights, get_tts_wav
+        import GPT_SoVITS.inference_webui as webui
+
+def wrapped_infer_panel(self, *args, **kwargs):
+    # Your custom implementation
+    x = kwargs.get('x', args[0] if args else None)
+    x_lens = kwargs.get('x_lens', args[1] if len(args) > 1 else None)
+    prompts = kwargs.get('prompts', args[2] if len(args) > 2 else None)
+    bert_feature = kwargs.get('bert_feature', args[3] if len(args) > 3 else None)
+
+    # Get other parameters from kwargs or use defaults
+    top_k = kwargs.get('top_k', -100)
+    top_p = kwargs.get('top_p', 100)
+    early_stop_num = kwargs.get('early_stop_num', -1)
+    temperature = kwargs.get('temperature', 1.0)
+    max_len = kwargs.get('max_len', 1000)
+    repetition_penalty = kwargs.get('repetition_penalty', 1.35)
+
+    model_cpu = self.to('cpu')
+    cpu_y, idx = Text2SemanticDecoder.infer_panel_naive(
+        model_cpu,
+        x.to('cpu'),
+        x_lens.to('cpu'),
+        prompts.to('cpu'),
+        bert_feature.to('cpu') if bert_feature is not None else None,
+        top_k=top_k,
+        top_p=top_p,
+        early_stop_num=early_stop_num,
+        temperature=temperature,
+        max_len=max_len,
+        repetition_penalty=repetition_penalty,
+    )
+    return cpu_y.to('mps'), idx
 
 
 # ANSI color codes
@@ -197,6 +242,53 @@ playback_queue = queue.Queue()
 # Global playback lock to ensure sequential playback
 playback_lock = threading.Lock()
 
+
+# A simple function to split text into chunks of a maximum character length.
+def split_text(text, max_chars=200):
+    """
+    Splits text into chunks, trying not to break sentences.
+    """
+    #words = text.split()
+    delimilers = [' ', '\n', '.', '?', '!', ':', ';', '。', '、', '？', '！', '：', '；', '…']
+    t = text
+    for d in delimilers[1:]:
+        t = t.replace(d, f'{d} ')
+    words = t.split()
+
+    is_first = True
+    current_limit = 10
+    chunks = []
+    current_chunk = []
+    current_len = 0
+    for word in words:
+        # Add one for the space.
+        if is_first:
+            if current_len > current_limit and current_chunk:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [word]
+                current_len = len(word)
+
+                current_limit = min(max_chars, current_limit*2)
+                if current_limit > max_chars:
+                    is_first = False
+            else:
+                current_chunk.append(word)
+                current_len += len(word) + 1
+        else:
+            if current_len > max_chars and current_chunk:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [word]
+                current_len = len(word)
+            else:
+                current_chunk.append(word)
+                current_len += len(word) + 1
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    print(f'*** {[len(c) for c in chunks]}')
+    return chunks
+
+
+# for GPT_SoVITS.TTS_infer_pack.TTS.TTS
 class GPT_SoVITS_TTS:
     def __init__(
         self,
@@ -205,6 +297,7 @@ class GPT_SoVITS_TTS:
         ref_audio_path,
         ref_text_path,
         ref_language,
+        target_language,
         device='cpu',
         is_half=False,
         version='v2',
@@ -255,6 +348,7 @@ class GPT_SoVITS_TTS:
             "aux_ref_audio_paths": [],
             "prompt_text": ref_text,
             "prompt_lang": dict_language[i18n(ref_language)],
+            "text_lang": dict_language[i18n(target_language)],
             "top_k": 5,
             "top_p": 1,
             "temperature": 1,
@@ -271,83 +365,107 @@ class GPT_SoVITS_TTS:
             "repetition_penalty": 1.35,
         }
 
-
-# A simple function to split text into chunks of a maximum character length.
-def split_text(text, max_chars=200):
-    """
-    Splits text into chunks, trying not to break sentences.
-    """
-    #words = text.split()
-    delimilers = [' ', '\n', '.', '?', '!', ':', ';', '。', '、', '？', '！', '：', '；', '…']
-    t = text
-    for d in delimilers[1:]:
-        t = t.replace(d, f'{d} ')
-    words = t.split()
-
-    is_first = True
-    current_limit = 10
-    chunks = []
-    current_chunk = []
-    current_len = 0
-    for word in words:
-        # Add one for the space.
-        if is_first:
-            if current_len > current_limit and current_chunk:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [word]
-                current_len = len(word)
-
-                current_limit = min(max_chars, current_limit*2)
-                if current_limit > max_chars:
-                    is_first = False
-            else:
-                current_chunk.append(word)
-                current_len += len(word) + 1
-        else:
-            if current_len > max_chars and current_chunk:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [word]
-                current_len = len(word)
-            else:
-                current_chunk.append(word)
-                current_len += len(word) + 1
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
-    print(f'*** {[len(c) for c in chunks]}')
-    return chunks
-
-def warm_up_model(tts: GPT_SoVITS_TTS, target_language):
-    try:
-        with open(os.devnull, 'w') as fnull:
-            with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
-                tts.inputs['text'] = "ツナマヨは人類の叡智だよ"
-                tts.inputs['text_lang'] = dict_language[i18n(target_language)]
-                for block in tts.pipeline.run(tts.inputs):
-                    #playback_q.put(block)
-                    pass
-        return True
-    except Exception as e:
-        error(f"Warm-up failed: {e}")
-        return False
-
-def synthesis_worker(tts: GPT_SoVITS_TTS, target_language, synthesis_q, playback_q):
-    while True:
-        chunk_text = synthesis_q.get()
-        if chunk_text is None:
-            synthesis_q.task_done()
-            break
-        info(f"Synthesizing: {chunk_text[:30]}..." + ("" if len(chunk_text) <= 30 else ""))
+    def warm_up(self):
         try:
-            tts.inputs['text'] = chunk_text
-            tts.inputs['text_lang'] = dict_language[i18n(target_language)]
             with open(os.devnull, 'w') as fnull:
                 with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
-                    for block in tts.pipeline.run(tts.inputs):
-                        playback_q.put(block)
+                    self.inputs['text'] = "ツナマヨは人類の叡智だよ"
+                    for block in self.pipeline.run(self.inputs):
+                        pass
+            return True
         except Exception as e:
-            print(f"Synthesis error for chunk '{chunk_text}': {e}")
-        success(f"Completed")
-        synthesis_q.task_done()
+            error(f"Warm-up failed: {e}")
+            return False
+
+    def synthesis_worker(self, synthesis_q, playback_q):
+        while True:
+            chunk_text = synthesis_q.get()
+            if chunk_text is None:
+                synthesis_q.task_done()
+                break
+            info(f"Synthesizing: {chunk_text[:30]}..." + ("" if len(chunk_text) <= 30 else ""))
+            try:
+                self.inputs['text'] = chunk_text
+                with open(os.devnull, 'w') as fnull:
+                    with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
+                        for block in self.pipeline.run(self.inputs):
+                            playback_q.put(block)
+            except Exception as e:
+                print(f"Synthesis error for chunk '{chunk_text}': {e}")
+            success(f"Completed")
+            synthesis_q.task_done()
+
+
+# for GPT_SoVITS.inference_webui.get_tts_wav
+class GPT_SoVITS:
+    def __init__(
+        self,
+        gpt_model_path,
+        sovits_model_path,
+        ref_audio_path,
+        ref_text_path,
+        ref_language,
+        target_language,
+        device='cpu',
+        version='v2',
+    ):
+        self.ref_audio_path = ref_audio_path
+        self.ref_language = ref_language
+        self.target_language = target_language
+
+        # Read reference text
+        if ref_text_path is None:
+            self.ref_text = None
+        else:
+            with open(ref_text_path, 'r', encoding='utf-8') as file:
+                self.ref_text = file.read()
+
+        # Change model weights
+        webui.device = device
+        webui.version = version
+        webui.change_gpt_weights(gpt_path=gpt_model_path)
+        webui.change_sovits_weights(sovits_path=sovits_model_path)
+
+    def run(self, chunk_text):
+        return webui.get_tts_wav(
+            ref_wav_path=self.ref_audio_path,
+            prompt_text=self.ref_text,
+            prompt_language=i18n(self.ref_language),
+            text=chunk_text,
+            text_language=i18n(self.target_language),
+            top_p=1,
+            temperature=1,
+            speed=1.1,
+        )
+
+    def warm_up(self):
+        try:
+            with open(os.devnull, 'w') as fnull:
+                with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
+                    dummy_text = "ツナマヨは人類の叡智だよ"
+                    list(self.run(dummy_text))
+            return True
+        except Exception as e:
+            error(f"Warm-up failed: {e}")
+            return False
+
+    def synthesis_worker(self, synthesis_q, playback_q):
+        while True:
+            chunk_text = synthesis_q.get()
+            if chunk_text is None:
+                synthesis_q.task_done()
+                break
+            info(f"Synthesizing: {chunk_text[:30]}..." + ("" if len(chunk_text) <= 30 else ""))
+            try:
+                with open(os.devnull, 'w') as fnull:
+                    with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
+                        for block in self.run(chunk_text):
+                            playback_q.put(block)
+            except Exception as e:
+                print(f"Synthesis error for chunk '{chunk_text}': {e}")
+            success(f"Completed")
+            synthesis_q.task_done()
+
 
 def playback_worker_continuous(playback_q, playback_lock):
     """
@@ -394,6 +512,7 @@ def playback_worker_continuous(playback_q, playback_lock):
             with playback_lock:
                 stream.write(block)
             playback_q.task_done()
+
 
 import numpy as np
 import sounddevice as sd
@@ -460,6 +579,7 @@ def play_notification(frequency=440):
     sd.play(tone, 22050)
     sd.wait()  # Wait for the tone to finish playing
 
+
 def main():
     # script should run on the top of the repository
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -480,7 +600,11 @@ def main():
         parser.add_argument('--temperature', type=float, default=1.0,
                         help="Temperature for generation (0.5-1.5)")
         parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='mps',
-                        help="either 'cpu', 'cuda', 'mps'")
+                        help="Device type. either 'cpu', 'cuda', 'mps'")
+        parser.add_argument('--inference', choices=['get_tts_wav', 'TTS'], default='get_tts_wav',
+                        help="Inference code. either 'get_tts_wav' or 'TTS'")
+        parser.add_argument('--model_version', choices=['v2', 'v3'], default='v2',
+                        help="Model version. either 'v2' or 'v3'")
 
         args = parser.parse_args()
 
@@ -496,19 +620,44 @@ def main():
         spinner = Spinner("Initializing TTS models...")
         spinner.start()
 
-        tts = GPT_SoVITS_TTS(
-            args.gpt_model,
-            args.sovits_model,
-            args.ref_audio,
-            args.ref_text,
-            args.ref_language,
-            device=device,
-        )
-        if device == 'mps':
-            monkey_patch_inferes()
+        inf_engine = args.inference
+        if inf_engine == 'TTS' and args.model_version == 'v3':
+            warning('TTS inference code does not support v3 models. use get_tts_wav version instead')
+            inf_engine = 'get_tts_wav'
 
+        if inf_engine == 'TTS':
+            gpt_sovits = None
+            # for TTS
+            tts = GPT_SoVITS_TTS(
+                args.gpt_model,
+                args.sovits_model,
+                args.ref_audio,
+                args.ref_text,
+                args.ref_language,
+                args.target_language,
+                device=device,
+                version=args.model_version,
+            )
+            if device == 'mps':
+                monkey_patch_inferes()
+        else:
+            tts = None
+            # for get_tts_wav()
+            gpt_sovits = GPT_SoVITS(
+                args.gpt_model,
+                args.sovits_model,
+                args.ref_audio,
+                args.ref_text,
+                args.ref_language,
+                args.target_language,
+                device=device,
+                version=args.model_version,
+            )
+            if device == 'mps':
+                webui.ssl_model = webui.ssl_model.to('mps')
+                webui.vq_model = webui.vq_model.to('mps')
+                webui.t2s_model.model.infer_panel = types.MethodType(wrapped_infer_panel, webui.t2s_model.model)
 
-        target_language = args.target_language
         input_mode = args.input_mode
         max_chunk_size = int(args.max_chunk_size)
 
@@ -519,8 +668,10 @@ def main():
         spinner = Spinner("Warming up model...")
         spinner.start()
 
-        # Warm up the model
-        warm_up_result = warm_up_model(tts, target_language)
+        if not tts is None:
+            warm_up_result = tts.warm_up()
+        else:
+            warm_up_result = gpt_sovits.warm_up()
 
         # Stop the warm-up spinner
         if warm_up_result:
@@ -535,16 +686,32 @@ def main():
         error(f"Failed to initialize models: {e}")
         return
 
-    print("\n✓ Model ready for input")
+    success('Model ready for input')
+    info(f'inference engine: {inf_engine}')
+    info(f'device: {device}')
+    if inf_engine == 'TTS':
+        info(f'model version: {tts.pipeline.configs.version}')
+    else:
+        info(f'model version: {webui.version}')
+
     play_notification(frequency=500)
-    
+
     # Start long-running worker threads once
-    synth_thread = threading.Thread(
-        target=synthesis_worker,
-        args=(tts, target_language, synthesis_queue, playback_queue))
+    if not tts is None:
+        # for TTS
+        synth_thread = threading.Thread(
+            target=tts.synthesis_worker,
+            args=(synthesis_queue, playback_queue))
+    else:
+        # for get_tts_wav()
+        synth_thread = threading.Thread(
+            target=gpt_sovits.synthesis_worker,
+            args=(synthesis_queue, playback_queue))
+
     play_thread = threading.Thread(
         target=playback_worker_continuous,
-        args=(playback_queue, playback_lock))
+            args=(playback_queue, playback_lock))
+
     synth_thread.start()
     play_thread.start()
 

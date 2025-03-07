@@ -19,24 +19,28 @@ pip install sounddevice pyperclip
 
 * run the script `local_tts/tts.py` like
 <pre>
-% python local_tts/tts.py 
-✓ TTS models initialized            
-✓ Model warm-up complete     
+(gpt-sovits) xxx local_tts % python tts.py --inference TTS
+<span style="color:green;">✓</span> TTS models initialized            
+<span style="color:green;">✓</span> Model warm-up complete     
+<span style="color:green;">✓</span> Model ready for input
+<span style="color:blue;">•</span> inference engine: TTS
+<span style="color:blue;">•</span> device: mps
+<span style="color:blue;">•</span> model version: v2
 
-✓ Model ready for input
-
-● Interactive TTS started in clipboard mode
-i Monitoring clipboard. Press Ctrl+C to end
 </pre>
+
+* there are two inference engines
+  * `TTS` class in `GPT_SoVITS.TTS_infer_pack.TTS` - known as "Parallel Inference Version" in GUI
+  * `get_tts_wav()` in `GPT_SoVITS.inference_webui` - v3 models are supported
 
 # Help
 <pre>
-% python local_tts/tts.py -h
-usage: tts.py [-h] [--gpt_model GPT_MODEL] [--sovits_model SOVITS_MODEL] [--ref_audio REF_AUDIO] [--ref_text REF_TEXT]
-              [--ref_language {中文,英文,日文}] [--target_language {中文,英文,日文,中英混合,日英混合,多语种混合}] [--input_mode {stdin,clipboard}]
-              [--max_chunk_size MAX_CHUNK_SIZE] [--speaking_rate SPEAKING_RATE] [--temperature TEMPERATURE]
+(gpt-sovits) xxx local_tts % python tts.py -h
+usage: tts.py [-h] [--gpt_model GPT_MODEL] [--sovits_model SOVITS_MODEL] [--ref_audio REF_AUDIO] [--ref_text REF_TEXT] [--ref_language {中文,英文,日文}]
+              [--target_language {中文,英文,日文,中英混合,日英混合,多语种混合}] [--input_mode {stdin,clipboard}] [--max_chunk_size MAX_CHUNK_SIZE] [--speaking_rate SPEAKING_RATE]
+              [--temperature TEMPERATURE] [--device {cpu,cuda,mps}] [--inference {get_tts_wav,TTS}] [--model_version {v2,v3}]
 
-Interactive GPT-SoVITS Text-to-Speech
+local Text-to-Speech script with GPT-SoVITS
 
 options:
   -h, --help            show this help message and exit
@@ -60,7 +64,11 @@ options:
   --temperature TEMPERATURE
                         Temperature for generation (0.5-1.5)
   --device {cpu,cuda,mps}
-                        either 'cpu', 'cuda', 'mps'
+                        Device type. either 'cpu', 'cuda', 'mps'
+  --inference {get_tts_wav,TTS}
+                        Inference code. either 'get_tts_wav' or 'TTS'
+  --model_version {v2,v3}
+                        Model version. either 'v2' or 'v3'
 </pre>
 
 # Misc
@@ -111,6 +119,8 @@ huggingface-cli download lj1995/GPT-SoVITS models--nvidia--bigvgan_v2_24khz_100b
 * update `local_tts/tts.py`
   * add MPS optimization -- only T2S is still done on CPU
 * update `local_tts/README.md`
+* add `v3` support
+  * for this, add `get_ttw_wav` inference engine
 
 ## 2025/03/01
 
