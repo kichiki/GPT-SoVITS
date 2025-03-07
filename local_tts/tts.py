@@ -21,7 +21,85 @@ import itertools
 import sys
 import math
 import torch
-from functools import partial
+
+# for MPS support
+from AR.models.t2s_model import Text2SemanticDecoder
+
+# Store original methods
+original_infer_panel_batch_infer = Text2SemanticDecoder.infer_panel_batch_infer
+original_infer_panel_naive_batched = Text2SemanticDecoder.infer_panel_naive_batched
+
+def wrapped_infer_panel_batch_infer(self, *args, **kwargs):
+    # Extract arguments from args or kwargs
+    all_phoneme_ids = kwargs.get('all_phoneme_ids', args[0] if args else None)
+    all_phoneme_lens = kwargs.get('all_phoneme_lens', args[1] if len(args) > 1 else None)
+    prompt = kwargs.get('prompt', args[2] if len(args) > 2 else None)
+    all_bert_features = kwargs.get('all_bert_features', args[3] if len(args) > 3 else None)
+
+    # Get other parameters from kwargs or use defaults
+    top_k = kwargs.get('top_k', 0)
+    top_p = kwargs.get('top_p', 0.7)
+    temperature = kwargs.get('temperature', 1.0)
+    early_stop_num = kwargs.get('early_stop_num', -1)
+    max_len = kwargs.get('max_len', 1000)
+    repetition_penalty = kwargs.get('repetition_penalty', 1.0)
+
+    model_cpu = self.to('cpu')
+    cpu_pred, idx_list = original_infer_panel_batch_infer(
+        model_cpu,
+        [all_phoneme_ids[0].to('cpu')],
+        all_phoneme_lens.to('cpu'),
+        prompt.to('cpu'),
+        [all_bert_features[0].to('cpu')],
+        top_k=top_k,
+        top_p=top_p,
+        temperature=temperature,
+        early_stop_num=early_stop_num,
+        max_len=max_len,
+        repetition_penalty=repetition_penalty,
+    )
+    return [cpu_p.to('mps') for cpu_p in cpu_pred], idx_list
+
+def wrapped_infer_panel_naive_batched(self, *args, **kwargs):
+    # Your custom implementation
+    all_phoneme_ids = kwargs.get('all_phoneme_ids', args[0] if args else None)
+    all_phoneme_lens = kwargs.get('all_phoneme_lens', args[1] if len(args) > 1 else None)
+    prompt = kwargs.get('prompt', args[2] if len(args) > 2 else None)
+    all_bert_features = kwargs.get('all_bert_features', args[3] if len(args) > 3 else None)
+
+    # Get other parameters from kwargs or use defaults
+    top_k = kwargs.get('top_k', 0)
+    top_p = kwargs.get('top_p', 0.7)
+    temperature = kwargs.get('temperature', 1.0)
+    early_stop_num = kwargs.get('early_stop_num', -1)
+    max_len = kwargs.get('max_len', 1000)
+    repetition_penalty = kwargs.get('repetition_penalty', 1.0)
+
+    model_cpu = self.to('cpu')
+    cpu_pred, idx_list = original_infer_panel_naive_batched(
+        model_cpu,
+        [all_phoneme_ids[0].to('cpu')],
+        all_phoneme_lens.to('cpu'),
+        prompt.to('cpu'),
+        [all_bert_features[0].to('cpu')],
+        top_k=top_k,
+        top_p=top_p,
+        temperature=temperature,
+        early_stop_num=early_stop_num,
+        max_len=max_len,
+        repetition_penalty=repetition_penalty,
+    )
+    return [cpu_p.to('mps') for cpu_p in cpu_pred], idx_list
+
+# Apply the monkey patches
+def monkey_patch_inferes():
+    Text2SemanticDecoder.infer_panel_batch_infer = wrapped_infer_panel_batch_infer
+    Text2SemanticDecoder.infer_panel_naive_batched = wrapped_infer_panel_naive_batched
+
+# Optional: function to restore original methods if needed
+def restore_original_inferes():
+    Text2SemanticDecoder.infer_panel_batch_infer = original_infer_panel_batch_infer
+    Text2SemanticDecoder.infer_panel_naive_batched = original_infer_panel_naive_batched
 
 
 # ANSI color codes
@@ -188,7 +266,8 @@ class GPT_SoVITS_TTS:
             "return_fragment": True,
             "fragment_interval": 0.3,
             "seed": actual_seed,
-            "parallel_infer": True,
+            #"parallel_infer": True,
+            "parallel_infer": False,
             "repetition_penalty": 1.35,
         }
 
@@ -243,6 +322,9 @@ def warm_up_model(tts: GPT_SoVITS_TTS, target_language):
             with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
                 tts.inputs['text'] = "ツナマヨは人類の叡智だよ"
                 tts.inputs['text_lang'] = dict_language[i18n(target_language)]
+                for block in tts.pipeline.run(tts.inputs):
+                    #playback_q.put(block)
+                    pass
         return True
     except Exception as e:
         error(f"Warm-up failed: {e}")
@@ -410,7 +492,11 @@ def main():
             args.ref_audio,
             args.ref_text,
             args.ref_language,
+            device='mps',
         )
+        # for mps, apply monkey_patch for infer methods
+        monkey_patch_inferes()
+
         target_language = args.target_language
         input_mode = args.input_mode
         max_chunk_size = int(args.max_chunk_size)
